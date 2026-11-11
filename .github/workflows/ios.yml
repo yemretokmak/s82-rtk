@@ -1,0 +1,31 @@
+name: iPhone IPA derle
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter test
+      - name: iOS derle (imzasız)
+        run: flutter build ios --release --no-codesign
+      - name: IPA paketle
+        run: |
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qr S82RTK.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: S82RTK-ipa
+          path: S82RTK.ipa
+          retention-days: 30
