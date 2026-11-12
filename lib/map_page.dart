@@ -134,7 +134,9 @@ class _MapPageState extends State<MapPage> {
         options: MapOptions(
           initialCenter: initialCenter(),
           initialZoom: 17,
-          maxZoom: 23,
+          // 28 ≈ piksel başına 0,5 mm: parsel köşelerine santimetre düzeyinde yaklaşılabilir
+          maxZoom: 28,
+          backgroundColor: const Color(0xFF15181D),
           onMapReady: () => ready = true,
           onPositionChanged: (cam, gesture) {
             zoom = cam.zoom;
@@ -148,15 +150,16 @@ class _MapPageState extends State<MapPage> {
               userAgentPackageName: 'com.s82rtk.s82_rtk',
               // Türkiye'de uydu görüntüsü genelde 18'e kadar var; ötesinde 18'i büyüterek göster
               maxNativeZoom: 18,
-              maxZoom: 23,
+              maxZoom: 24,
             )
           else
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.s82rtk.s82_rtk',
               maxNativeZoom: 19,
-              maxZoom: 23,
+              maxZoom: 24,
             ),
+          const TmGrid(),
           PolylineLayer(polylines: [
             ...drawLines(),
             if (t != null && hasPos)
@@ -240,6 +243,52 @@ class _MapPageState extends State<MapPage> {
             child: const Icon(Icons.my_location),
           ),
         ]),
+      ),
+    ]);
+  }
+}
+
+
+/// Yakın zoomda TM koordinatlarına hizalı ölçü ızgarası (10 m … 1 cm)
+class TmGrid extends StatelessWidget {
+  const TmGrid({super.key});
+
+  static const _steps = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0];
+
+  @override
+  Widget build(BuildContext context) {
+    final cam = MapCamera.of(context);
+    if (cam.zoom < 20) return const SizedBox.shrink();
+    final z = cm();
+    final b = cam.visibleBounds;
+    final sw = Tm.forward(b.south, b.west, z), ne = Tm.forward(b.north, b.east, z);
+    final nw = Tm.forward(b.north, b.west, z), se = Tm.forward(b.south, b.east, z);
+    final minY = [sw[0], nw[0]].reduce(min), maxY = [ne[0], se[0]].reduce(max);
+    final minX = [sw[1], se[1]].reduce(min), maxX = [ne[1], nw[1]].reduce(max);
+    final width = maxY - minY;
+    // Ekranda ~6–12 çizgi olacak adım
+    final step = _steps.firstWhere((s) => width / s <= 12, orElse: () => 10.0);
+    LatLng ll(double y, double x) {
+      final r = Tm.inverse(y, x, z);
+      return LatLng(r[0], r[1]);
+    }
+
+    final lines = <Polyline>[];
+    final c = Colors.white.withValues(alpha: 0.18);
+    for (var y = (minY / step).floor() * step; y <= maxY; y += step) {
+      lines.add(Polyline(points: [ll(y, minX), ll(y, maxX)], color: c, strokeWidth: 1));
+    }
+    for (var x = (minX / step).floor() * step; x <= maxX; x += step) {
+      lines.add(Polyline(points: [ll(minY, x), ll(maxY, x)], color: c, strokeWidth: 1));
+    }
+    final label = step < 1 ? '${(step * 100).round()} cm' : '${step.round()} m';
+    return Stack(children: [
+      PolylineLayer(polylines: lines),
+      Positioned(
+        left: 12,
+        bottom: 62,
+        child: Text('Izgara: $label',
+            style: const TextStyle(color: Colors.white, fontSize: 12, shadows: [Shadow(blurRadius: 3)])),
       ),
     ]);
   }
