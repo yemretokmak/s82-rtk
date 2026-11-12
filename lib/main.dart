@@ -115,11 +115,15 @@ class _HomeState extends State<Home> {
   @override
   void initState() {
     super.initState();
-    t = Timer.periodic(const Duration(milliseconds: 400), (_) => setState(() {}));
+    // Yeni konum gelince anında, ayrıca saniyede bir (NTRIP vb. durumlar için) yenile
+    Gnss.tick.addListener(_refresh);
+    t = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
   }
 
+  void _refresh() { if (mounted) setState(() {}); }
+
   @override
-  void dispose() { t?.cancel(); super.dispose(); }
+  void dispose() { t?.cancel(); Gnss.tick.removeListener(_refresh); super.dispose(); }
 
   Color fixColor(int q) => q == 4 ? green : q == 5 ? acc : (q == 1 || q == 2) ? blue : red;
 
@@ -150,7 +154,7 @@ class _HomeState extends State<Home> {
               ),
             ]),
           ),
-          Expanded(child: [const ConnectPage(), const StatusPage(), const MeasurePage(), const StakePage(), const MapPage()][tab]),
+          Expanded(child: [ConnectPage(), StatusPage(), MeasurePage(), StakePage(), MapPage()][tab]),
         ]),
       ),
       bottomNavigationBar: NavigationBar(

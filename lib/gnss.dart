@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+
 /// Alıcıdan gelen son durum
 class Gnss {
   static double lat = 0, lon = 0, alt = 0, geoidSep = 0, hdop = 0;
@@ -9,6 +11,8 @@ class Gnss {
   static int lastUpdateMs = 0;
   static int _gpsView = 0, _glView = 0;
   static final List<String> log = [];
+  /// Her yeni GGA'da artar; ekranlar bununla anında yenilenir
+  static final ValueNotifier<int> tick = ValueNotifier(0);
 
   static double get ellHeight => alt + geoidSep;
 
@@ -63,6 +67,7 @@ class Gnss {
       diffAge = d(13) ?? -1;
       lastGga = line;
       lastUpdateMs = DateTime.now().millisecondsSinceEpoch;
+      tick.value++;
     } else if (t.endsWith('GST') && f.length >= 9) {
       sigLat = d(6) ?? -1; sigLon = d(7) ?? -1; sigAlt = d(8) ?? -1;
     } else if (t == 'GPGSV' && f.length >= 4) {

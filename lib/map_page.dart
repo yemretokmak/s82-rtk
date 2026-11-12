@@ -67,7 +67,7 @@ class _MapPageState extends State<MapPage> {
     ];
     if (pts.isEmpty) return;
     if (pts.length == 1) { ctrl.move(pts.first, 19); return; }
-    ctrl.fitCamera(CameraFit.bounds(bounds: LatLngBounds.fromPoints(pts), padding: const EdgeInsets.all(40), maxZoom: 20));
+    ctrl.fitCamera(CameraFit.bounds(bounds: LatLngBounds.fromPoints(pts), padding: const EdgeInsets.all(40), maxZoom: 21));
   }
 
   Marker dot(LatLng p, Color c, String label, {double size = 12, VoidCallback? onTap, bool ring = false}) {
@@ -133,7 +133,7 @@ class _MapPageState extends State<MapPage> {
         options: MapOptions(
           initialCenter: initialCenter(),
           initialZoom: 17,
-          maxZoom: 22,
+          maxZoom: 23,
           onMapReady: () => ready = true,
           onPositionChanged: (cam, gesture) {
             zoom = cam.zoom;
@@ -145,15 +145,16 @@ class _MapPageState extends State<MapPage> {
             TileLayer(
               urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
               userAgentPackageName: 'com.s82rtk.s82_rtk',
-              maxNativeZoom: 19,
-              maxZoom: 22,
+              // Türkiye'de uydu görüntüsü genelde 18'e kadar var; ötesinde 18'i büyüterek göster
+              maxNativeZoom: 18,
+              maxZoom: 23,
             )
           else
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.s82rtk.s82_rtk',
               maxNativeZoom: 19,
-              maxZoom: 22,
+              maxZoom: 23,
             ),
           PolylineLayer(polylines: [
             ...drawLines(),
@@ -172,6 +173,12 @@ class _MapPageState extends State<MapPage> {
             if (t != null) dot(ll(t.y, t.x), Colors.redAccent, '', size: 22, ring: true),
             if (hasPos) dot(me, fixC, '', size: 18),
           ]),
+          const Scalebar(
+            alignment: Alignment.bottomLeft,
+            textStyle: TextStyle(color: Colors.white, fontSize: 12, shadows: [Shadow(blurRadius: 3)]),
+            lineColor: Colors.white,
+            padding: EdgeInsets.only(left: 12, bottom: 30),
+          ),
           RichAttributionWidget(attributions: [
             TextSourceAttribution(base == 'sat' ? 'Esri, Maxar, Earthstar Geographics' : 'OpenStreetMap katkıcıları'),
           ]),
@@ -217,7 +224,7 @@ class _MapPageState extends State<MapPage> {
             onPressed: () {
               if (!hasPos) return;
               setState(() => follow = !follow);
-              ctrl.move(me, max(ctrl.camera.zoom, 19));
+              ctrl.move(me, max(ctrl.camera.zoom, 20));
             },
             child: const Icon(Icons.my_location),
           ),
