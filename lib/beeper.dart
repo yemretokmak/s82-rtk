@@ -27,7 +27,11 @@ class Beeper {
   // ad -> (frekans Hz, süre ms)
   static const _tones = {'uzak': (880, 70), 'yakin': (1320, 60), 'tamam': (1960, 140)};
 
+  static const _native = MethodChannel('s82/spp');
+
   static Future<void> init() async {
+    _timer ??= Timer.periodic(const Duration(milliseconds: 40), (_) => _tick());
+    if (Platform.isAndroid) return; // Android: yerel AudioTrack (MainActivity.kt)
     try {
       final dir = await getTemporaryDirectory();
       await AudioPlayer.global.setAudioContext(AudioContextConfig(
@@ -39,7 +43,6 @@ class Beeper {
         await f.writeAsBytes(_wav(e.value.$1.toDouble(), e.value.$2));
         _files[e.key] = f.path;
         final p = AudioPlayer();
-        await p.setPlayerMode(PlayerMode.lowLatency);
         await p.setReleaseMode(ReleaseMode.stop);
         await p.setSource(DeviceFileSource(f.path));
         _players[e.key] = p;
@@ -48,7 +51,18 @@ class Beeper {
     } catch (_) {
       _ready = false; // ses yoksa sadece titreşim
     }
-    _timer ??= Timer.periodic(const Duration(milliseconds: 40), (_) => _tick());
+  }
+
+  static void _play(String tone) {
+    if (Platform.isAndroid) {
+      final t = _tones[tone]!;
+      _native.invokeMethod('beep', {'hz': t.$1, 'ms': t.$2}).catchError((_) {});
+      return;
+    }
+    if (!_ready) return;
+    // iOS: önce durdur, sonra baştan çal (önceki bip bitmemiş olsa da yeni bip kaçmaz)
+    final p = _players[tone]!;
+    p.stop().then((_) => p.resume()).catchError((_) {});
   }
 
   /// Bip aralığı (ms): startDist'te ~1200 ms, toleransta ~90 ms
@@ -66,15 +80,8 @@ class Beeper {
     _last = now;
     final ok = d <= tolerance;
     final tone = ok ? 'tamam' : (d < startDist / 3 ? 'yakin' : 'uzak');
-    if (_ready) {
-      final p = _players[tone]!;
-      p.play(DeviceFileSource(_files[tone]!), mode: PlayerMode.lowLatency).catchError((_) {});
-    }
-    if (ok) {
-      HapticFeedback.heavyImpact();
-    } else if (!_ready) {
-      HapticFeedback.selectionClick();
-    }
+    _play(tone);
+    if (ok) HapticFeedback.heavyImpact();
   }
 
   /// 16 bit mono 44.1 kHz sinüs WAV; tık sesi olmasın diye uçlar yumuşatılır

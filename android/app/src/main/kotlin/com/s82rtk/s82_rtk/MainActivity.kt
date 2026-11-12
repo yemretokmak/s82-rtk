@@ -5,6 +5,9 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -57,6 +60,11 @@ class MainActivity : FlutterActivity() {
                 }
                 "connect" -> { connect(call.argument<String>("address")!!); res.success(null) }
                 "disconnect" -> { close(); state(false, "Bağlı değil"); res.success(null) }
+                "beep" -> {
+                    // Aplikasyon bip sesi: frekans (Hz), süre (ms)
+                    beep(call.argument<Int>("hz") ?: 1000, call.argument<Int>("ms") ?: 60)
+                    res.success(null)
+                }
                 "write" -> {
                     val b = call.arguments as ByteArray
                     try { out?.write(b); res.success(true) } catch (e: Exception) { res.success(false) }
@@ -98,6 +106,44 @@ class MainActivity : FlutterActivity() {
                 state(false, "Hata: ${e.message}")
             } finally { close() }
         }.start()
+    }
+
+    // Her ton için hazır PCM ve AudioTrack (STATIC): anında, üst üste çalabilir
+    private val tracks = HashMap<String, AudioTrack>()
+
+    private fun beep(hz: Int, ms: Int) {
+        try {
+            val key = "$hz/$ms"
+            val t = tracks.getOrPut(key) { makeTrack(hz, ms) }
+            if (t.playState == AudioTrack.PLAYSTATE_PLAYING) t.stop()
+            t.reloadStaticData()
+            t.play()
+        } catch (_: Exception) {}
+    }
+
+    private fun makeTrack(hz: Int, ms: Int): AudioTrack {
+        val rate = 44100
+        val n = rate * ms / 1000
+        val fade = rate * 6 / 1000
+        val pcm = ShortArray(n) { i ->
+            var a = 0.85
+            if (i < fade) a *= i.toDouble() / fade
+            if (i > n - fade) a *= (n - i).toDouble() / fade
+            (Math.sin(2 * Math.PI * hz * i / rate) * a * 32767).toInt().toShort()
+        }
+        val t = AudioTrack.Builder()
+            .setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            .setAudioFormat(AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(rate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+            .setTransferMode(AudioTrack.MODE_STATIC)
+            .setBufferSizeInBytes(n * 2)
+            .build()
+        t.write(pcm, 0, n)
+        return t
     }
 
     private fun close() {
