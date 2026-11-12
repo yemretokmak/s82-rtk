@@ -1,14 +1,20 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_ble/universal_ble.dart';
 
 import 'gnss.dart';
 import 'link.dart';
+import 'map_page.dart';
+import 'ncz.dart';
 
 const acc = Color(0xFFFFB020);
 const green = Color(0xFF3CC85A);
@@ -22,6 +28,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   prefs = await SharedPreferences.getInstance();
   Ble.init();
+  Spp.init();
+  await loadDrawing();
   runApp(const App());
 }
 
@@ -44,6 +52,52 @@ int cm() {
 }
 
 List<double> currentYX() => Tm.forward(Gnss.lat, Gnss.lon, cm());
+
+NczDrawing? drawing;
+String drawingName = '';
+
+Future<File> _drawingFile() async => File('${(await getApplicationDocumentsDirectory()).path}/cizim.ncz');
+
+Future<void> loadDrawing() async {
+  try {
+    final f = await _drawingFile();
+    if (await f.exists()) {
+      drawing = Ncz.parse(await f.readAsBytes());
+      drawingName = prefs.getString('drawingName') ?? 'cizim.ncz';
+    }
+  } catch (_) {}
+}
+
+/// NCZ / NCN / TXT dosyası aç. NCZ: çizim haritaya, noktalar aplikasyon listesine.
+Future<String> importFile() async {
+  final f = await FilePicker.pickFile(type: FileType.any);
+  if (f == null) return '';
+  final bytes = await f.readAsBytes();
+  final name = f.name;
+  List<Pt> pts;
+  if (name.toLowerCase().endsWith('.ncz')) {
+    final d = Ncz.parse(bytes);
+    if (d.entities.isEmpty) return 'NCZ okunamadı ya da boş';
+    drawing = d;
+    drawingName = name;
+    prefs.setString('drawingName', name);
+    await (await _drawingFile()).writeAsBytes(bytes);
+    pts = d.points.where((e) => e.name.isNotEmpty).map((e) => Pt(e.name, e.pts[0][0], e.pts[0][1], e.pts[0][2], e.layerName)).toList();
+    var warn = '';
+    if (d.zone != 0 && d.zone != cm()) warn = '\nUYARI: çizim DOM ${d.zone}, uygulama DOM ${cm()}';
+    if (!d.isItrf) warn += '\nUYARI: çizim ITRF değil (${d.projection})';
+    final stake = loadPts('stake');
+    for (final p in pts) { stake.removeWhere((s) => s.name == p.name); stake.add(p); }
+    savePts('stake', stake);
+    final nl = d.lines.length;
+    return '$name: ${pts.length} nokta aplikasyon listesine, $nl çizgi/parsel haritaya eklendi.$warn';
+  }
+  pts = Pt.parseText(latin1.decode(bytes, allowInvalid: true));
+  final stake = loadPts('stake');
+  for (final p in pts) { stake.removeWhere((s) => s.name == p.name); stake.add(p); }
+  savePts('stake', stake);
+  return '$name: ${pts.length} nokta aplikasyon listesine eklendi';
+}
 
 List<Pt> loadPts(String key) => Pt.parseText(prefs.getString(key) ?? '');
 void savePts(String key, List<Pt> l) => prefs.setString(key, l.map((p) => p.fmt()).join('\n'));
@@ -83,8 +137,8 @@ class _HomeState extends State<Home> {
             child: Row(children: [
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                color: Ble.connected ? fixColor(q) : Colors.grey,
-                child: Text(Ble.connected ? Gnss.fixText(q) : 'BAĞLI DEĞİL',
+                color: Link.connected ? fixColor(q) : Colors.grey,
+                child: Text(Link.connected ? Gnss.fixText(q) : 'BAĞLI DEĞİL',
                     style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 17)),
               ),
               const SizedBox(width: 12),
@@ -96,7 +150,7 @@ class _HomeState extends State<Home> {
               ),
             ]),
           ),
-          Expanded(child: [const ConnectPage(), const StatusPage(), const MeasurePage(), const StakePage()][tab]),
+          Expanded(child: [const ConnectPage(), const StatusPage(), const MeasurePage(), const StakePage(), const MapPage()][tab]),
         ]),
       ),
       bottomNavigationBar: NavigationBar(
@@ -107,6 +161,7 @@ class _HomeState extends State<Home> {
           NavigationDestination(icon: Icon(Icons.satellite_alt), label: 'Durum'),
           NavigationDestination(icon: Icon(Icons.place), label: 'Ölçüm'),
           NavigationDestination(icon: Icon(Icons.navigation), label: 'Aplikasyon'),
+          NavigationDestination(icon: Icon(Icons.map), label: 'Harita'),
         ],
       ),
     );
@@ -149,6 +204,29 @@ class _ConnectPageState extends State<ConnectPage> {
     prefs.setString('mount', mount.text.trim());
   }
 
+  Future<void> sppPick() async {
+    try {
+      final l = await Spp.bonded();
+      if (!mounted) return;
+      if (l.isEmpty) { toast(context, 'Önce Android ayarlarından S82 ile eşleştir'); return; }
+      final d = await showDialog<Map>(
+          context: context,
+          builder: (c) => SimpleDialog(
+              title: const Text('Eşleşmiş cihazlar'),
+              children: l
+                  .map((m) => SimpleDialogOption(
+                      onPressed: () => Navigator.pop(c, m), child: Text('${m['name']}\n${m['address']}')))
+                  .toList()));
+      if (d == null) return;
+      prefs.setString('lastId', d['address'] as String);
+      prefs.setString('lastName', d['name'] as String);
+      prefs.setString('lastMode', 'spp');
+      Spp.connect(d['address'] as String);
+    } on PlatformException catch (e) {
+      if (mounted) toast(context, e.message ?? 'Bluetooth hatası');
+    }
+  }
+
   Future<void> scan() async {
     final found = <String, String>{};
     try {
@@ -177,8 +255,9 @@ class _ConnectPageState extends State<ConnectPage> {
                                 title: Text(e.value),
                                 subtitle: Text(e.key, style: const TextStyle(fontSize: 11)),
                                 onTap: () {
-                                  prefs.setString('bleId', e.key);
-                                  prefs.setString('bleName', e.value);
+                                  prefs.setString('lastId', e.key);
+                                  prefs.setString('lastName', e.value);
+                                  prefs.setString('lastMode', 'ble');
                                   Navigator.pop(dc);
                                   Ble.connect(e.key, e.value);
                                 }))
@@ -195,17 +274,19 @@ class _ConnectPageState extends State<ConnectPage> {
   @override
   Widget build(BuildContext context) {
     return ListView(padding: const EdgeInsets.all(14), children: [
-      title('S82 köprüsü (ESP32 BLE)'),
-      Text('${Ble.status}\nGelen: ${Ble.bytesIn} bayt, NMEA satırı: ${Gnss.nmeaCount}'
+      title('S82 bağlantısı'),
+      Text('${Link.status}\nGelen: ${Link.bytesIn} bayt, NMEA satırı: ${Gnss.nmeaCount}'
           '${Gnss.board.isNotEmpty ? '\nKart: ${Gnss.board}' : ''}'),
-      btn('Köprüyü ara ve bağlan', scan),
+      if (Link.sppAvailable) btn('S82 (Bluetooth) – eşleşmiş cihaz seç', sppPick),
+      btn('ESP32 köprüyü ara (BLE)', scan),
       row2(
           btn('Son cihaza bağlan', () {
-            final id = prefs.getString('bleId');
-            if (id == null) { toast(context, 'Önce ara ve seç'); return; }
-            Ble.connect(id, prefs.getString('bleName') ?? id);
+            final id = prefs.getString('lastId');
+            final mode = prefs.getString('lastMode');
+            if (id == null) { toast(context, 'Önce cihaz seç'); return; }
+            if (mode == 'spp') { Spp.connect(id); } else { Ble.connect(id, prefs.getString('lastName') ?? id); }
           }, green),
-          btn('Kes', () => Ble.disconnect(), red)),
+          btn('Kes', () => Link.disconnect(), red)),
       title('TUSAGA-Aktif (NTRIP)'),
       TextField(controller: host, decoration: const InputDecoration(labelText: 'Sunucu adresi (IP)')),
       TextField(controller: port, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Port')),
@@ -237,12 +318,12 @@ class _ConnectPageState extends State<ConnectPage> {
       row2(
           btn('NTRIP Başlat', () {
             save();
-            if (!Ble.connected) toast(context, 'Uyarı: köprü bağlı değil');
+            if (!Link.connected) toast(context, 'Uyarı: S82 bağlı değil');
             Ntrip.start(host.text.trim(), int.tryParse(port.text) ?? 2101, user.text.trim(), pass.text, mount.text.trim());
           }, green),
           btn('Durdur', () => Ntrip.stop(), red)),
       const SizedBox(height: 6),
-      Text('Durum: ${Ntrip.status}\nAlınan: ${Ntrip.bytes} bayt, S82\'ye iletilen: ${Ble.rtcmOut} bayt',
+      Text('Durum: ${Ntrip.status}\nAlınan: ${Ntrip.bytes} bayt, S82\'ye iletilen: ${Link.rtcmOut} bayt',
           style: const TextStyle(color: dim, fontSize: 13)),
       title('Koordinat sistemi'),
       const Text('ITRF96 → TM 3° (GRS80, k=1, sağa +500000). 0 = otomatik (Bodrum/Milas → 27)',
@@ -489,8 +570,19 @@ class _StakePageState extends State<StakePage> {
       title('Ayarlar'),
       TextField(controller: tol, keyboardType: TextInputType.number,
           decoration: const InputDecoration(labelText: 'Tolerans (cm)'), onChanged: (v) => prefs.setString('tol', v)),
+      btn('Dosya aç (NCZ / NCN / TXT)', () async {
+        try {
+          final m = await importFile();
+          if (m.isNotEmpty && mounted) {
+            setState(() => stake = loadPts('stake'));
+            showDialog(context: this.context, builder: (c) => AlertDialog(content: Text(m)));
+          }
+        } catch (e) {
+          if (mounted) toast(this.context, 'Hata: $e');
+        }
+      }, green),
       btn('Aplikasyon noktalarını yapıştır', paste),
-      Text('NetCAD .ncn içeriğini kopyalayıp yapıştırabilirsin. Yüklü nokta: ${stake.length}',
+      Text('Yüklü nokta: ${stake.length}${drawing != null ? '   Çizim: $drawingName' : ''}',
           style: const TextStyle(color: dim, fontSize: 12)),
     ]);
   }

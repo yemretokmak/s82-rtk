@@ -1,58 +1,120 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:universal_ble/universal_ble.dart';
 
 import 'gnss.dart';
 
-/// ESP32 köprüsü (Nordic UART Service) üzerinden S82 bağlantısı
+/// Alıcı bağlantısı: Android'de S82'ye doğrudan klasik Bluetooth (SPP),
+/// iPhone'da (ve istenirse Android'de) ESP32 BLE köprüsü.
+class Link {
+  static String mode = ''; // 'spp' | 'ble'
+  static bool connected = false;
+  static String status = 'Bağlı değil';
+  static int bytesIn = 0, rtcmOut = 0;
+  static final StringBuffer _line = StringBuffer();
+
+  static bool get sppAvailable => Platform.isAndroid;
+
+  static void feed(List<int> data) {
+    bytesIn += data.length;
+    for (final b in data) {
+      if (b == 10 || b == 13) {
+        final s = _line.toString();
+        if (s.startsWith(r'$')) Gnss.parse(s);
+        _line.clear();
+      } else if (b == 36) {
+        _line.clear();
+        _line.writeCharCode(b);
+      } else if (b >= 32 && b <= 126 && _line.length < 300) {
+        _line.writeCharCode(b);
+      }
+    }
+  }
+
+  static void send(Uint8List d) {
+    if (!connected) return;
+    if (mode == 'spp') {
+      Spp.write(d);
+    } else {
+      Ble.send(d);
+    }
+  }
+
+  static Future<void> disconnect() async {
+    if (mode == 'spp') await Spp.disconnect();
+    if (mode == 'ble') await Ble.disconnect();
+    connected = false;
+    status = 'Bağlı değil';
+  }
+}
+
+/// Android: S82'ye klasik Bluetooth (MainActivity.kt platform kanalı)
+class Spp {
+  static const _m = MethodChannel('s82/spp');
+  static const _e = EventChannel('s82/spp/events');
+  static StreamSubscription? _sub;
+
+  static void init() {
+    if (!Platform.isAndroid) return;
+    _sub ??= _e.receiveBroadcastStream().listen((ev) {
+      final m = ev as Map;
+      if (m['t'] == 'data') {
+        Link.feed(m['b'] as Uint8List);
+      } else if (m['t'] == 'state' && Link.mode == 'spp') {
+        Link.connected = m['ok'] == true;
+        Link.status = m['msg'] as String;
+      }
+    });
+  }
+
+  static Future<List<Map>> bonded() async =>
+      ((await _m.invokeMethod('bonded')) as List).cast<Map>();
+
+  static Future<void> connect(String address) async {
+    await Link.disconnect();
+    Link.mode = 'spp';
+    await _m.invokeMethod('connect', {'address': address});
+  }
+
+  static Future<void> disconnect() async => _m.invokeMethod('disconnect');
+
+  static Future<void> write(Uint8List d) async {
+    final ok = await _m.invokeMethod('write', d);
+    if (ok == true) Link.rtcmOut += d.length;
+  }
+}
+
+/// ESP32 köprüsü (Nordic UART Service)
 class Ble {
   static const svc = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   static const rxChar = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // telefon -> köprü
   static const txChar = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // köprü -> telefon
 
   static String? deviceId;
-  static String deviceName = '';
-  static bool connected = false;
-  static String status = 'Bağlı değil';
-  static int bytesIn = 0, rtcmOut = 0;
   static int payload = 20;
-  static final StringBuffer _line = StringBuffer();
   static final List<Uint8List> _queue = [];
   static bool _writing = false;
 
   static void init() {
     UniversalBle.onConnectionChange = (c) {
-      if (c.deviceId != deviceId) return;
-      connected = c.isConnected;
-      status = c.isConnected ? 'Bağlı: $deviceName' : 'Bağlantı koptu';
+      if (c.deviceId != deviceId || Link.mode != 'ble') return;
+      Link.connected = c.isConnected;
+      if (!c.isConnected) Link.status = 'Bağlantı koptu';
     };
     UniversalBle.onValueChange = (v) {
       if (v.characteristicId.toLowerCase() != txChar) return;
-      bytesIn += v.value.length;
-      for (final b in v.value) {
-        final ch = String.fromCharCode(b);
-        if (ch == '\n' || ch == '\r') {
-          final s = _line.toString();
-          if (s.startsWith(r'$')) Gnss.parse(s);
-          _line.clear();
-        } else if (ch == r'$') {
-          _line.clear();
-          _line.write(ch);
-        } else if (b >= 32 && b <= 126 && _line.length < 300) {
-          _line.write(ch);
-        }
-      }
+      Link.feed(v.value);
     };
   }
 
   static Future<void> connect(String id, String name) async {
-    await disconnect();
+    await Link.disconnect();
+    Link.mode = 'ble';
     deviceId = id;
-    deviceName = name;
-    status = 'Bağlanıyor: $name';
+    Link.status = 'Bağlanıyor: $name';
     try {
       await UniversalBle.connect(id, timeout: const Duration(seconds: 20));
       await UniversalBle.discoverServices(id);
@@ -61,18 +123,16 @@ class Ble {
         payload = (mtu - 3).clamp(20, 240);
       } catch (_) {}
       await UniversalBle.subscribeNotifications(id, svc, txChar);
-      connected = true;
-      status = 'Bağlı: $name';
+      Link.connected = true;
+      Link.status = 'Bağlı: $name';
     } catch (e) {
-      connected = false;
-      status = 'Hata: $e';
+      Link.connected = false;
+      Link.status = 'Hata: $e';
     }
   }
 
   static Future<void> disconnect() async {
     final id = deviceId;
-    connected = false;
-    status = 'Bağlı değil';
     if (id != null) {
       try { await UniversalBle.disconnect(id); } catch (_) {}
     }
@@ -80,7 +140,7 @@ class Ble {
 
   /// RTCM verisini köprüye yazar (MTU boyunda parçalar, sırayla)
   static void send(Uint8List data) {
-    if (!connected || deviceId == null) return;
+    if (deviceId == null) return;
     for (var i = 0; i < data.length; i += payload) {
       _queue.add(Uint8List.sublistView(data, i, (i + payload).clamp(0, data.length)));
     }
@@ -91,11 +151,11 @@ class Ble {
   static Future<void> _pump() async {
     if (_writing) return;
     _writing = true;
-    while (_queue.isNotEmpty && connected) {
+    while (_queue.isNotEmpty && Link.connected) {
       final p = _queue.removeAt(0);
       try {
         await UniversalBle.write(deviceId!, svc, rxChar, p, withoutResponse: true);
-        rtcmOut += p.length;
+        Link.rtcmOut += p.length;
       } catch (_) {}
     }
     _writing = false;
@@ -164,11 +224,11 @@ class Ntrip {
             // Başlıktan sonra gelen RTCM varsa ilet (HTTP/1.1 ise boş satırı atla)
             var rest = head.sublist(idx + 2);
             if (rest.length >= 2 && rest[0] == 13 && rest[1] == 10) rest = rest.sublist(2);
-            if (rest.isNotEmpty) { bytes += rest.length; Ble.send(Uint8List.fromList(rest)); }
+            if (rest.isNotEmpty) { bytes += rest.length; Link.send(Uint8List.fromList(rest)); }
             return;
           }
           bytes += chunk.length;
-          Ble.send(chunk);
+          Link.send(chunk);
         }, onDone: () { if (!done.isCompleted) done.complete(); },
            onError: (_) { if (!done.isCompleted) done.complete(); });
         _ggaTimer = Timer.periodic(const Duration(seconds: 5), (_) {

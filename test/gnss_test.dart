@@ -15,4 +15,12 @@ void main() {
     expect(Gnss.lat, closeTo(37.0345, 1e-9));
     expect(Pt.parse('P12;512345,123;4101234,567')!.x, closeTo(4101234.567, 1e-6));
   });
+  test('ters TM gidis-donus', () {
+    for (final ll in [[37.0345, 27.4305], [37.312, 27.781], [36.98, 26.2], [38.5, 28.4]]) {
+      final yx = Tm.forward(ll[0], ll[1], 27);
+      final back = Tm.inverse(yx[0], yx[1], 27);
+      expect(back[0], closeTo(ll[0], 1e-8)); // ~1 mm
+      expect(back[1], closeTo(ll[1], 1e-8));
+    }
+  });
 }

@@ -1,4 +1,4 @@
-name: iPhone IPA derle
+name: Derle (iPhone IPA + Android APK)
 
 on:
   push:
@@ -28,4 +28,26 @@ jobs:
         with:
           name: S82RTK-ipa
           path: S82RTK.ipa
+          retention-days: 30
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - run: cp build/app/outputs/flutter-apk/app-release.apk S82RTK.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: S82RTK-apk
+          path: S82RTK.apk
           retention-days: 30

@@ -1,6 +1,9 @@
 # S82 RTK
 
-South S82 RTK GNSS alıcısı için saha uygulaması (iPhone; ESP32 BLE köprüsü üzerinden).
+South S82 RTK GNSS alıcısı için saha uygulaması (Android + iPhone, tek Flutter kodu).
+
+- Android: S82'ye doğrudan klasik Bluetooth; iPhone: ESP32 BLE köprüsü
+- Harita (OSM / uydu altlık), NetCAD .ncz okuma (nokta, çizgi, parsel)
 
 - Bağlantı: ESP32 köprü (Nordic UART Service), `esp32/S82_BLE_Kopru`
 - TUSAGA-Aktif NTRIP istemcisi (GGA gönderir, RTCM'i alıcıya iletir)
@@ -14,3 +17,6 @@ South S82 RTK GNSS alıcısı için saha uygulaması (iPhone; ESP32 BLE köprüs
 3. iPhone: Ayarlar → Genel → VPN ve Aygıt Yönetimi → geliştiriciye güven.
 
 `android-native/` klasöründe S82'ye doğrudan Bluetooth ile bağlanan Android uygulaması var.
+
+## Lisans
+GPL-2.0-or-later. NCZ okuyucu (`lib/ncz.dart`), Yusuf Eminoğlu'nun [cad2geo](https://pypi.org/project/cad2geo/) projesinin (GPL-2.0-or-later) Dart'a uyarlanmış alt kümesidir.
