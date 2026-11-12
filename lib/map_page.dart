@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'beeper.dart';
 import 'gnss.dart';
 import 'link.dart';
 import 'main.dart';
@@ -200,6 +201,16 @@ class _MapPageState extends State<MapPage> {
         right: 10,
         bottom: 40,
         child: Column(children: [
+          FloatingActionButton.small(
+            heroTag: 'beep',
+            tooltip: 'Sesli uyarı',
+            onPressed: () => setState(() {
+              Beeper.enabled = !Beeper.enabled;
+              prefs.setBool('beep', Beeper.enabled);
+            }),
+            child: Icon(Beeper.enabled ? Icons.volume_up : Icons.volume_off),
+          ),
+          const SizedBox(height: 8),
           FloatingActionButton.small(
             heroTag: 'base',
             tooltip: 'Altlık',

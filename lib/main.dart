@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_ble/universal_ble.dart';
 
 import 'gnss.dart';
+import 'beeper.dart';
 import 'link.dart';
 import 'map_page.dart';
 import 'ncz.dart';
@@ -30,6 +31,9 @@ void main() async {
   Ble.init();
   Spp.init();
   await loadDrawing();
+  Beeper.enabled = prefs.getBool('beep') ?? true;
+  Beeper.startDist = double.tryParse(prefs.getString('beepStart') ?? '') ?? 3.0;
+  await Beeper.init();
   runApp(const App());
 }
 
@@ -127,9 +131,23 @@ class _HomeState extends State<Home> {
 
   Color fixColor(int q) => q == 4 ? green : q == 5 ? acc : (q == 1 || q == 2) ? blue : red;
 
+  void _updateBeeper(bool stale) {
+    final t = target;
+    Beeper.active = tab == 3 || tab == 4;
+    Beeper.tolerance = (double.tryParse(prefs.getString('tol') ?? '') ?? 2) / 100;
+    if (t == null || stale || Gnss.fix == 0 || !Link.connected) {
+      Beeper.distance = null;
+      return;
+    }
+    final yx = currentYX();
+    final dy = t.y - yx[0], dx = t.x - yx[1];
+    Beeper.distance = sqrt(dy * dy + dx * dx);
+  }
+
   @override
   Widget build(BuildContext context) {
     final stale = DateTime.now().millisecondsSinceEpoch - Gnss.lastUpdateMs > 3000;
+    _updateBeeper(stale);
     final q = stale ? 0 : Gnss.fix;
     final sig = Gnss.sigLat >= 0 ? '±${f3(sqrt(Gnss.sigLat * Gnss.sigLat + Gnss.sigLon * Gnss.sigLon))} m' : '±?';
     return Scaffold(
@@ -469,7 +487,7 @@ class StakePage extends StatefulWidget {
 class _StakePageState extends State<StakePage> {
   final tol = ctl('tol', '2');
   List<Pt> stake = loadPts('stake');
-  int lastBeep = 0;
+  final beepStart = ctl('beepStart', '3');
 
   void step(int d) {
     if (stake.isEmpty) { toast(context, 'Aplikasyon listesi boş'); return; }
@@ -555,9 +573,6 @@ class _StakePageState extends State<StakePage> {
       final dz = t.z - Gnss.alt;
       small = 'Semt ${az.toStringAsFixed(1)}° (${(az * 400 / 360).toStringAsFixed(4)} g)   '
           'ΔZ ${dz >= 0 ? 'dolgu' : 'kazı'} ${dz.abs().toStringAsFixed(3)}\nFix: ${Gnss.fixText()}';
-      final now = DateTime.now().millisecondsSinceEpoch;
-      if (ok && now - lastBeep > 1000) { HapticFeedback.heavyImpact(); SystemSound.play(SystemSoundType.click); lastBeep = now; }
-      else if (!ok && d < 0.3 && now - lastBeep > d * 3000 + 150) { HapticFeedback.selectionClick(); lastBeep = now; }
     } else if (t != null) {
       dist = 'Konum yok';
     }
@@ -574,6 +589,18 @@ class _StakePageState extends State<StakePage> {
       title('Ayarlar'),
       TextField(controller: tol, keyboardType: TextInputType.number,
           decoration: const InputDecoration(labelText: 'Tolerans (cm)'), onChanged: (v) => prefs.setString('tol', v)),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Sesli uyarı (yaklaştıkça bip sıklaşır)'),
+        value: Beeper.enabled,
+        onChanged: (v) => setState(() { Beeper.enabled = v; prefs.setBool('beep', v); }),
+      ),
+      TextField(controller: beepStart, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Biplerin başlayacağı mesafe (m)'),
+          onChanged: (v) {
+            final x = double.tryParse(v.replaceAll(',', '.'));
+            if (x != null && x > 0) { Beeper.startDist = x; prefs.setString('beepStart', v); }
+          }),
       btn('Dosya aç (NCZ / NCN / TXT)', () async {
         try {
           final m = await importFile();
