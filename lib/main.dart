@@ -57,6 +57,15 @@ int cm() {
 
 List<double> currentYX() => Tm.forward(Gnss.lat, Gnss.lon, cm());
 
+/// Alet (jalon) yüksekliği: zeminden antenin altına (m)
+double antH() => double.tryParse((prefs.getString('antH') ?? '2.000').replaceAll(',', '.')) ?? 2.0;
+
+/// Anten altından faz merkezine (S82 etiketi: L1 = 88,4 mm)
+double pco() => double.tryParse((prefs.getString('pco') ?? '0.0884').replaceAll(',', '.')) ?? 0.0884;
+
+/// Zemin kotu = GGA kotu (faz merkezi) - alet yüksekliği - faz merkezi ofseti
+double zGround() => Gnss.alt - antH() - pco();
+
 NczDrawing? drawing;
 String drawingName = '';
 
@@ -166,7 +175,7 @@ class _HomeState extends State<Home> {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                    'Uydu ${Gnss.sats}/${Gnss.satsInView}   $sig\nNTRIP: ${Ntrip.status}'
+                    'Uydu ${Gnss.sats}/${Gnss.satsInView}   $sig   h=${antH().toStringAsFixed(3)}\nNTRIP: ${Ntrip.status}'
                     '${Gnss.diffAge >= 0 ? '  yaş ${Gnss.diffAge.toStringAsFixed(0)}s' : ''}',
                     style: const TextStyle(fontSize: 12)),
               ),
@@ -216,7 +225,7 @@ class ConnectPage extends StatefulWidget {
 
 class _ConnectPageState extends State<ConnectPage> {
   final host = ctl('host'), port = ctl('port', '2101'), user = ctl('user'), pass = ctl('pass'),
-      mount = ctl('mount'), cmC = ctl('cm', '0');
+      mount = ctl('mount'), cmC = ctl('cm', '0'), pcoC = ctl('pco', '0.0884');
 
   void save() {
     prefs.setString('host', host.text.trim());
@@ -352,6 +361,18 @@ class _ConnectPageState extends State<ConnectPage> {
           style: TextStyle(color: dim, fontSize: 13)),
       TextField(controller: cmC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Orta meridyen')),
       btn('Kaydet', () { prefs.setString('cm', cmC.text.trim()); toast(context, 'DOM: ${cm()}'); }),
+      title('Anten'),
+      const Text('Zemin Z = alıcı kotu − alet yüksekliği − faz merkezi ofseti. '
+          'Alet yüksekliğini Ölçüm sekmesinden girersin. S82 etiketi: alttan faz merkezine L1 = 88,4 mm.',
+          style: TextStyle(color: dim, fontSize: 13)),
+      TextField(controller: pcoC, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Faz merkezi ofseti (m)')),
+      btn('Kaydet', () {
+        final x = double.tryParse(pcoC.text.replaceAll(',', '.'));
+        if (x == null || x < 0 || x > 0.5) { toast(context, 'Geçersiz değer'); return; }
+        prefs.setString('pco', pcoC.text.replaceAll(',', '.'));
+        toast(context, 'Faz merkezi ofseti: ${pco().toStringAsFixed(4)} m');
+      }),
     ]);
   }
 }
@@ -371,8 +392,9 @@ class StatusPage extends StatelessWidget {
           'HDOP     : ${Gnss.hdop.toStringAsFixed(1)}\n'
           'Enlem    : ${Gnss.lat.toStringAsFixed(9)}\n'
           'Boylam   : ${Gnss.lon.toStringAsFixed(9)}\n'
-          'Elips. h : ${f3(Gnss.ellHeight)} m\n'
-          'Kot(GGA) : ${f3(Gnss.alt)} m\n\n'
+          'Zemin Z  : ${f3(zGround())} m\n'
+          'Anten Z  : ${f3(Gnss.alt)} m  (h=${antH().toStringAsFixed(3)}+${pco().toStringAsFixed(4)})\n'
+          'Elips. h : ${f3(Gnss.ellHeight - antH() - pco())} m (zemin)\n\n'
           'TM${cm()}  Y : ${f3(yx[0])}\n'
           'TM${cm()}  X : ${f3(yx[1])}\n\n'
           '${Gnss.sigLat >= 0 ? 'σ K/D/Y  : ${f3(Gnss.sigLat)} / ${f3(Gnss.sigLon)} / ${f3(Gnss.sigAlt)} m\n' : ''}'
@@ -392,7 +414,7 @@ class MeasurePage extends StatefulWidget {
 }
 
 class _MeasurePageState extends State<MeasurePage> {
-  final name = ctl('nextName', '1'), epochs = ctl('epochs', '5');
+  final name = ctl('nextName', '1'), epochs = ctl('epochs', '5'), ant = ctl('antH', '2.000');
   bool fixOnly = prefs.getBool('fixOnly') ?? true;
   bool measuring = false;
   String prog = '';
@@ -421,7 +443,7 @@ class _MeasurePageState extends State<MeasurePage> {
         final ok = fixOnly ? Gnss.fix == 4 : Gnss.fix > 0;
         if (ok) {
           final yx = currentYX();
-          sy += yx[0]; sx += yx[1]; sz += Gnss.alt; k++;
+          sy += yx[0]; sx += yx[1]; sz += zGround(); k++;
           if (Gnss.fix != 4) allFix = false;
         }
         setState(() => prog = 'Ölçülüyor $k/$n  (${Gnss.fixText()})');
@@ -430,7 +452,7 @@ class _MeasurePageState extends State<MeasurePage> {
     }
     measuring = false;
     if (k < n) { setState(() => prog = 'İptal / zaman aşımı ($k/$n)'); return; }
-    final p = Pt(nm, sy / k, sx / k, sz / k, allFix ? 'FIX' : 'FLOAT/TEKIL');
+    final p = Pt(nm, sy / k, sx / k, sz / k, '${allFix ? 'FIX' : 'FLOAT/TEKIL'} h=${antH().toStringAsFixed(3)}');
     pts.removeWhere((e) => e.name == nm);
     pts.add(p);
     savePts('measured', pts);
@@ -447,6 +469,14 @@ class _MeasurePageState extends State<MeasurePage> {
       title('Nokta ölç'),
       row2(TextField(controller: name, decoration: const InputDecoration(labelText: 'Nokta adı')),
           TextField(controller: epochs, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Epok'))),
+      TextField(
+          controller: ant,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Alet (jalon) yüksekliği (m)', helperText: 'Zeminden antenin altına'),
+          onChanged: (v) {
+            final x = double.tryParse(v.replaceAll(',', '.'));
+            if (x != null && x >= 0 && x < 10) prefs.setString('antH', v.replaceAll(',', '.'));
+          }),
       CheckboxListTile(
           contentPadding: EdgeInsets.zero,
           value: fixOnly,
@@ -570,7 +600,7 @@ class _StakePageState extends State<StakePage> {
       dir = '${dx >= 0 ? 'KUZEY' : 'GÜNEY'} ${dx.abs().toStringAsFixed(3)}\n'
           '${dy >= 0 ? 'DOĞU ' : 'BATI '} ${dy.abs().toStringAsFixed(3)}';
       az = (atan2(dy, dx) * 180 / pi + 360) % 360;
-      final dz = t.z - Gnss.alt;
+      final dz = t.z - zGround();
       small = 'Semt ${az.toStringAsFixed(1)}° (${(az * 400 / 360).toStringAsFixed(4)} g)   '
           'ΔZ ${dz >= 0 ? 'dolgu' : 'kazı'} ${dz.abs().toStringAsFixed(3)}\nFix: ${Gnss.fixText()}';
     } else if (t != null) {

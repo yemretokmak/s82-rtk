@@ -71,6 +71,7 @@ struct Cfg {
   String ssid, wpass, host, user, npass, mount, mac, pin;
   int port = 2101, cm = 27;
   float tolCm = 2.0, beepStart = 3.0;
+  float antH = 2.0, pco = 0.0884;   // alet yüksekliği, faz merkezi ofseti (m)
   bool fixOnly = true;
 } cfg;
 
@@ -89,6 +90,8 @@ void loadCfg() {
   cfg.tolCm = pref.getFloat("tol", 2.0);
   cfg.beepStart = pref.getFloat("bstart", 3.0);
   cfg.fixOnly = pref.getBool("fixonly", true);
+  cfg.antH = pref.getFloat("anth", 2.0);
+  cfg.pco = pref.getFloat("pco", 0.0884);
   pref.end();
 }
 
@@ -101,6 +104,7 @@ void saveCfg() {
   pref.putString("pin", cfg.pin); pref.putInt("cm", cfg.cm);
   pref.putFloat("tol", cfg.tolCm); pref.putFloat("bstart", cfg.beepStart);
   pref.putBool("fixonly", cfg.fixOnly);
+  pref.putFloat("anth", cfg.antH); pref.putFloat("pco", cfg.pco);
   pref.end();
 }
 
@@ -162,6 +166,9 @@ void parseNmea(char *line) {
     g.sLat = atof(f[6]); g.sLon = atof(f[7]);
   }
 }
+
+// Zemin kotu = GGA kotu (faz merkezi) - alet yüksekliği - faz merkezi ofseti
+double zGround() { return g.alt - cfg.antH - cfg.pco; }
 
 // ---------------- TM 3° (GRS80, k0=1, +500000) ----------------
 void tmForward(double latDeg, double lonDeg, int cm, double &Y, double &X) {
@@ -400,7 +407,7 @@ void drawPage(bool full) {
     if (full) txt(4, 32, 2, C_ACC, "DURUM");
     txt(4, 56, 2, C_FG, pos ? "Y " + String(Y, 3) : "Y -", 18);
     txt(4, 76, 2, C_FG, pos ? "X " + String(X, 3) : "X -", 18);
-    txt(4, 96, 2, C_FG, pos ? "Z " + String(g.alt, 3) : "Z -", 18);
+    txt(4, 96, 2, C_FG, pos ? "Z " + String(zGround(), 3) : "Z -", 18);
     txt(4, 120, 1, C_DIM, "HDOP " + String(g.hdop, 1) + "  Yas " + (g.age >= 0 ? String(g.age, 0) + "s" : "-") + "  TM" + String(cfg.cm), 38);
     txt(4, 136, 1, C_FG, "S82: " + String(SerialBT.connected() ? "bagli" : (cfg.mac.isEmpty() ? "MAC ayarla" : "bagli degil")), 38);
     txt(4, 150, 1, C_FG, "WiFi: " + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("hotspot bekleniyor")), 38);
@@ -428,12 +435,12 @@ void drawPage(bool full) {
     if (full) txt(4, 32, 2, C_ACC, "OLCUM");
     txt(4, 58, 2, C_FG, "Ad: " + nextName(), 18);
     txt(4, 82, 2, measuring ? C_ACC : C_DIM, measuring ? "Olculuyor " + String(measGot) + "/" + String(measEpochs) : "SOL: OLC", 18);
-    txt(4, 110, 1, C_DIM, cfg.fixOnly ? "Sadece FIX iken olcer" : "FLOAT/TEKIL de kabul", 38);
+    txt(4, 110, 1, C_DIM, String(cfg.fixOnly ? "Sadece FIX" : "FLOAT de kabul") + "   h=" + String(cfg.antH, 3) + " m", 38);
     txt(4, 130, 1, C_FG, "Son:", 38);
     txt(4, 144, 1, C_FG, lastMeasured, 38);
     txt(4, 166, 2, C_FG, pos ? "Y " + String(Y, 3) : "Y -", 18);
     txt(4, 186, 2, C_FG, pos ? "X " + String(X, 3) : "X -", 18);
-    txt(4, 206, 2, C_FG, pos ? "Z " + String(g.alt, 3) : "Z -", 18);
+    txt(4, 206, 2, C_FG, pos ? "Z " + String(zGround(), 3) : "Z -", 18);
   }
 }
 
@@ -458,11 +465,11 @@ void measureLoop() {
   bool ok = cfg.fixOnly ? g.fix == 4 : g.fix > 0;
   if (!ok || !fixFresh()) return;
   double Y, X; tmForward(g.lat, g.lon, cfg.cm, Y, X);
-  mY += Y; mX += X; mZ += g.alt; measGot++;
+  mY += Y; mX += X; mZ += zGround(); measGot++;
   if (measGot < measEpochs) return;
   measuring = false;
   String name = nextName();
-  String line = name + " " + String(mY / measGot, 3) + " " + String(mX / measGot, 3) + " " + String(mZ / measGot, 3) + " " + fixText(g.fix);
+  String line = name + " " + String(mY / measGot, 3) + " " + String(mX / measGot, 3) + " " + String(mZ / measGot, 3) + " " + fixText(g.fix) + " h=" + String(cfg.antH, 3);
   File f = LittleFS.open("/olcum.ncn", "a");
   if (f) { f.println(line); f.close(); }
   pref.begin("kum", false); pref.putInt("pno", pref.getInt("pno", 1) + 1); pref.end();
@@ -489,6 +496,8 @@ void webRoot() {
   h += "<h3>Ölçüm / Aplikasyon</h3>Orta meridyen<input name='cm' value='" + String(cfg.cm) + "'>";
   h += "Tolerans (cm)<input name='tol' value='" + String(cfg.tolCm, 1) + "'>Bip başlama mesafesi (m)<input name='bstart' value='" + String(cfg.beepStart, 1) + "'>";
   h += "Sadece FIX iken ölç (1/0)<input name='fixonly' value='" + String(cfg.fixOnly ? 1 : 0) + "'>";
+  h += "Alet (jalon) yüksekliği (m)<input name='anth' value='" + String(cfg.antH, 3) + "'>";
+  h += "Faz merkezi ofseti (m, S82 L1 = 0.0884)<input name='pco' value='" + String(cfg.pco, 4) + "'>";
   h += "<button>Kaydet</button> (Wi-Fi/MAC değişirse cihaz yeniden başlar)</form>";
   h += "<h3>Aplikasyon noktaları (" + String(stakeN) + ")</h3><form method='POST' action='/apl'>"
        "<textarea name='t' rows='8' placeholder='P1 530854.770 4101902.460 58.27'></textarea>"
@@ -508,6 +517,8 @@ void webSave() {
   cfg.tolCm = web.arg("tol").toFloat(); if (cfg.tolCm <= 0) cfg.tolCm = 2;
   cfg.beepStart = web.arg("bstart").toFloat(); if (cfg.beepStart <= 0) cfg.beepStart = 3;
   cfg.fixOnly = web.arg("fixonly") != "0";
+  if (web.hasArg("anth")) { float v = web.arg("anth").toFloat(); if (v >= 0 && v < 10) cfg.antH = v; }
+  if (web.hasArg("pco")) { float v = web.arg("pco").toFloat(); if (v >= 0 && v < 0.5) cfg.pco = v; }
   saveCfg();
   bool restart = oldSsid != cfg.ssid || oldW != cfg.wpass || oldMac != cfg.mac || oldPin != cfg.pin;
   web.send(200, "text/html; charset=utf-8", String("<meta charset='utf-8'><body style='font-family:sans-serif'>Kaydedildi. ") +
